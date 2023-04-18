@@ -1,0 +1,5 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*terraform.*
+*documents/JuOspina_key.pem

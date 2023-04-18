@@ -1,0 +1,236 @@
+---
+- name: Install Docker
+  hosts: all
+  become: true
+  tasks:
+    #-----------------------Docker-------------------------#
+    - name: Update-1
+      apt:
+        update_cache: true
+        force_apt_get: true
+
+    - name: Install some tools HTTPS
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - curl
+          - software-properties-common
+          - lsb-release
+        state: present
+    
+    - name: Add Key Docker
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+    
+    - name: Add apt repository for stable version
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_lsb.codename }} stable
+        state: present
+
+    - name: Install docker 
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        update_cache: yes
+
+- name: Install Jenkins
+  hosts: localhost
+  become: true
+
+  tasks:
+    - name: Update packages
+      apt:
+        update_cache: true
+        force_apt_get: true
+
+    - name: Instalar OpenJDK 11
+      apt:
+        name: openjdk-11-jre
+        state: present
+
+    - name: Descargar y agregar clave del repositorio de Jenkins
+      become_user: ubuntu
+      shell: |
+        curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | sudo tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+        echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/ | sudo tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+        
+    - name: Update packages
+      apt:
+        update_cache: true
+        force_apt_get: true
+
+    - name: Install Jenkins
+      apt:
+        name: jenkins
+        state: present
+
+    - name: Install others
+      apt:
+        name:
+          - git
+          - mysql-client-core-8.0
+        state: present
+    
+    - name: Add jenkins user to docker
+      shell: |
+        sudo usermod -a -G docker jenkins
+        sudo service jenkins restart
+
+- name: Install Kubernetes
+  hosts: Masters,Nodes
+  become: true
+  tasks:      
+    #----------------------Systemctl config-------------------------#
+    - name: disable swap
+      shell: |
+        sudo swapoff -a
+        sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+    - name: add kernel modules
+      shell: |
+        cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+        overlay
+        br_netfilter
+        EOF
+
+    - name: load kernel modules
+      shell: |
+        sudo modprobe overlay
+        sudo modprobe br_netfilter
+
+    - name: ip tables
+      shell: |
+        cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+        net.bridge.bridge-nf-call-iptables  = 1
+        net.bridge.bridge-nf-call-ip6tables = 1
+        net.ipv4.ip_forward                 = 1
+        EOF
+    
+    - name: Apply new settings
+      command: sudo sysctl --system
+
+    - name: Create directory
+      file:
+        path: /etc/docker
+        state: directory
+
+    - name: Docker config
+      shell: |
+        sudo tee /etc/docker/daemon.json <<EOF
+        {
+          "exec-opts": ["native.cgroupdriver=systemd"],
+          "log-driver": "json-file",
+          "log-opts": {
+            "max-size": "100m"
+          },
+        "storage-driver": "overlay2"
+        }
+        EOF
+    
+    #--------Restart Docker with new values----------------#
+    - name: enable Docker
+      command: sudo systemctl enable --now docker
+
+    - name: Add current user to Docker group
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+
+    - name: restart docker
+      shell: |
+        sudo systemctl daemon-reload
+        sudo systemctl restart docker
+        sudo systemctl enable docker
+
+    - name: Enable systemd cgroup for containerd
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^plugins.cri.systemd_cgroup\s*=\s*false'
+        line: 'plugins.cri.systemd_cgroup = true'
+    
+    #--------------------Install K8S-------------------#
+    - name: Update-2
+      apt:
+        update_cache: true
+        force_apt_get: true
+
+    - name: Add Key K8S
+      apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+    
+    - name: Add apt K8S
+      apt_repository:
+        repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+        filename: kubernetes.list
+    
+    - name: install K8S
+      apt:
+        name:
+          - vim
+          - git
+          - wget
+          - kubelet=1.20.11-00
+          - kubeadm=1.20.11-00
+          - kubectl=1.20.11-00
+        state: present
+        update_cache: yes
+      
+    - name: hold versions
+      shell: sudo apt-mark hold kubelet kubeadm kubectl
+
+- name: Config Master node
+  hosts: Masters
+  become: true
+  tasks:
+    - name: Pull kube images
+      command: sudo kubeadm config images pull
+
+    - name: Initializate Cluster
+      command: kubeadm init 
+
+    - name: Setup kubeconfig for vagrant user
+      shell: |
+        mkdir -p /home/ubuntu/.kube
+        sudo cp -i /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+        sudo chown ubuntu:ubuntu /home/ubuntu/.kube/config
+
+    - name: install CNI network
+      become: false
+      command: kubectl apply -f https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml
+
+    - name: Generate join command
+      command: kubeadm token create --print-join-command
+      register: kubernetes_join_command
+      
+    - name: Copy join command to local file.
+      local_action: copy content="{{ kubernetes_join_command.stdout_lines[0] }}" dest="./kubernetes_join_command"
+
+- name: Join Nodes
+  hosts: Nodes
+  become: true
+  tasks:
+    - name: Copy join command from Ansible Controller to the worker nodes.
+      copy:
+        src: ./kubernetes_join_command
+        dest: ./kubernetes_join_command
+        mode: 0777
+
+    - name: Run Join Command
+      command: sh ./kubernetes_join_command
+    
+    - name: Install MySQL Client
+      apt:
+        name: mysql-client-core-8.0
+
+
+

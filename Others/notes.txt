@@ -1,0 +1,70 @@
+DEPLIEGUE:
+
+PASO 1: INSTALACION Y APROVISIONAMIENTO
+- terraform apply
+- ssh -> bastion
+- export ANSIBLE_HOST_KEY_CHECKING=False
+- ansible-playbook -i inventory.yaml documents/dependencies.yaml
+- mysql -h juospina-db.cmfd8deuhu77.us-east-1.rds.amazonaws.com -u admin -p < ./documents/database.sql 
+
+Nota: cambiar dns de base de datos si no corresponde
+
+PASO 2: DESPLIEGUE APP:
+- ssh -i documents/JuOspina_key.pem ubuntu@10.0.0.81 -> ip master
+- vi app.yaml -> copiar codigo y ponerlo
+- kubectl apply -f app.yaml
+
+Nota: ver que todo este corriendo, ir a el load balancer y comprobar con kubectl get pods
+
+PASO 3: CONFIGURACION JENKINS
+- ir a ip_bastion:8080
+- sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+- instalar plugins: nodejs 12, docker, ssh agent
+- poner credenciales docker y ssh 
+
+----------------------CREDENCIALES---------------------
+docker: 
+usuario: juospina
+clave: Juan68031001
+id: DockerHubCredentials
+
+ssh:
+id: ubuntu_bastion
+name: ubuntu
+poner llave privada
+---------------------------------------------------------
+
+- agregar webhook a github http://44.215.109.24:8080/github-webhook/
+- agregar en el pipeline las nuevas ip (las del master de K8S)
+- subir al repo cambios
+- crear pipeline
+
+Frontend:
+pipeline normal
+dicard old builds
+github hook
+pipeline script from SCM
+script path: jenkinsfile
+
+Backend:
+Multibranch pipeline
+que solo queden los ultimos 5 builds
+escaneo de cambios cada minuto
+
+---------------------GIT-----------------------
+1. git chechout branch (git chechout -b branch -> creo)
+2. git push origin branch (subo a la repo la branch) SOLO CUANDO ES NUEVA
+3. git commit -am 
+4. git push origin branch
+------------------------------------------------ HASTA ACA VA PARA BACKEND, SI SE QUIERE PROSEGUIR SE DEBE HACER PULL REQUEST
+Frontend:
+5. git chechout main
+6. git pull origin main
+7. git merge Dev
+8. git push origin main
+-------------------------------------------------- ACTUALIZAR RAMAS
+1. git checkout main
+2. git pull origin main
+3. git chechout Dev
+4. git pull origin Dev
+5. git merge main

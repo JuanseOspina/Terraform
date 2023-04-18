@@ -1,0 +1,81 @@
+apiVersion: apps/v1        
+kind: Deployment
+metadata:
+  name: frontend-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend        
+  template:
+    metadata:
+      labels:
+        app: frontend      
+    spec:
+      containers:
+      - name: frontend
+        image: juospina/frontend:latest
+        ports:
+        - containerPort: 3030
+
+---        
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+      - name: backend
+        image: juospina/backend:latest
+        env:
+          - name: DB_HOST
+            value: juospina-db.cmfd8deuhu77.us-east-1.rds.amazonaws.com
+          - name: DB_USER
+            value: admin
+          - name: DB_PASS
+            value: J680o680# 
+          - name: DB_NAME
+            value: movie_db 
+        ports:
+        - containerPort: 3000
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+spec:
+  selector:
+    app: backend
+  ports:
+  - name: puerto-3000
+    port: 3000
+    targetPort: 3000
+
+---    
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+spec:
+  selector:
+    app: frontend
+  type: NodePort
+  ports:
+  - name: http
+    protocol: TCP
+    port: 3030
+    targetPort: 3030
+    nodePort: 30001
